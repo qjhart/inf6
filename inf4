@@ -1,105 +1,132 @@
 #! /bin/bash
 
-# program at end of file. search #MAIN
-
-function log() {
-  local level=0;
-  if [[ $1 = -v* ]]; then
-    let level=${#1}-1;
-    shift
-  fi
-  if [[ $level -le ${INF4[verbose]} ]]; then
-    (>&2 echo $@)
-  fi
-}
-
-function err() {
-  local n=$1
-  shift
-  [[ -z ${INF4[quiet]} && -n $1 ]] && (>&2 echo err: $@)
-  exit $n;
-}
-
-function _http () {
-  local stdinp=
-  local http="http --ssl=${INF4[http_ssl]} --session-read-only=${INF4[http_session]}"
-  if [[ $1 == '-n' || -n ${INF4[noop]} ]]; then
-    [[ $1 == '-n' ]] && shift
-    if [[ ! -t 0 ]]; then
-      IFS='' read -r -d '' stdinp;
-      log "$http $@ <<<'$stdinp'"
-    else
-      log "$http $@"
-    fi
-  else
-    $http "$@"
-  fi
-}
-
-
 : <<=cut
 =pod
+
 =head1  NAME
-  inf4 - Communicate with a Fedora 4 server
+
+inf4 - Communicate with a Fedora 4 server
+
 =head1 USAGE
-  inf4 [-b|--base=I<base>] [-x|--prefix=I<prefix>] [-r|--no-rc] \
-	[-n|--dry-run] [-d|--dir] [-i|--interactive] [-p|--print] \
+
+inf4 [-b|--base=I<base>] [-x|--prefix=I<prefix>] [-r|--no-rc] \
+	[-n|--dry-run] [-d|--dir] [-p|--print] \
 	I<cmd> [cmd-options]
 	where <cmd> = config|patch|put|GET|HEAD|OPTIONS|url
-=cut
 
-: <<=cut
-=pod
 =head1 OPTIONS
+
 =over 4
+
 =item B<-b|--base=I<INF4_BASE>>
- set the Fedora4 URL
+
+set the Fedora4 URL
+
 =item B<-x |--prefix=> I<prefix>>
-Add a new prefix for ttl, using prefix:url  format
+
+ Add a new prefix for ttl, using prefix:url  format
+
 =item B<-r|--no-rc>
+
 Do not read from or write to rc file.
+
 =item B<-n|--dry-run>
+
 Show what you would do do not really do it
+
 =item B<-d|--dir>
+
 Set URL (wrt. INF4_BASE) for this operation only
-=item B<-i|--interactive>
-Use interactive mode
+
 =item B<-p|--print>
+
 Adjust httpie --print= argument
+
 =back
+
 =cut
 
-function main.cmd () {
-    cmd=$1
-    shift;
+function main() {
+  local opts=();
 
-    case $cmd in
-      file.path | file.ignore)
-        $cmd "$@";
-        ;;
-      item.fetch )
-        $cmd "$@";
-        ;;
-      file.metadata | file.is_metadata | file.metadata_file ) # Metadata Commands
-        $cmd "$@";
-        ;;
-      collection.create  | collection.delete | collection.upload )
-        $cmd "$@";
-        ;;
-      util.home | util.config | login  ) # Utilities
-	      $cmd "$@";
-	      ;;
-      put | patch)
-	      $cmd "$@";
-	      ;;
-      http )	# http requests
-	      _http "$@";
-	      ;;
+  declare -A -g G=([http_session]='inf4'
+                   [path]="http://localhost:8666/fcrepo/rest"
+                   [attr]=
+                   [verbose]=0
+                  );
 
-      *)
-	      echo  "$cmd not found";
-	      ;;
-    esac
+  declare -A -g IGNORE;
+
+  G[home]=$(util.home)
+
+  # Read the configuration file
+  config=${G[home]}/.fin/config.yml
+  if [[ -f $config ]]; then
+    eval $(parse_yaml "$config")
+  fi
+
+  _read_attributes
+  _read_ignore
+
+  # Main only gets parameters up to first non-variable
+  while true; do
+	  case $1 in
+	    -*) opts+=($1); shift ;;
+	    -- ) shift; break;;
+	    *) break;
+  	  esac
+  done
+
+  set -- "${opts[@]}" '--' "$@"
+
+  if ! opts=$(getopt -o vh:np: --long verbose,base:,dry-run,print: -n 'inf4' -- "$@"); then
+    echo "Bad Command Options." >&2 ;
+    exit 1 ;
+  fi
+
+  eval set -- "$opts"
+
+  while true; do
+	  case $1 in
+	    -n | --dry-run) G[noop]=1; shift ;;
+	    -v | --verbose) let G[verbose]+=1; shift ;;
+	    -p | --print) G[print]=$2; shift 2 ;;
+	    -- ) shift; break;;
+	    *) break;
+	  esac
+  done
+
+  # Now Run the command
+  cmd=$1
+  shift;
+
+  case $cmd in
+    file.path | file.ignore)
+      $cmd "$@";
+      ;;
+    item.fetch )
+      $cmd "$@";
+      ;;
+    file.metadata | file.is_metadata | file.metadata_file ) # Metadata Commands
+      $cmd "$@";
+      ;;
+    collection.create  | collection.delete | collection.upload )
+      $cmd "$@";
+      ;;
+    util.home | util.config | login  ) # Utilities
+	    $cmd "$@";
+	    ;;
+    put | patch)
+	    $cmd "$@";
+	    ;;
+    http )	# http requests
+	    _http "$@";
+	    ;;
+
+    *)
+	    echo  "$cmd: cmd not found";
+	    ;;
+  esac
 }
 
 : <<=cut
@@ -235,7 +262,7 @@ AUTO
 
 function file.ignore() {
   local path=$(realpath -m "$1")
-  local home=${INF4[home]}
+  local home=${G[home]}
   for i in "${!IGNORE[@]}"; do
     if [[ $path = $home/$i ]]; then
       log -vvv file.ignore "$1=$i"
@@ -272,7 +299,7 @@ Can be used like C<if (inf4 file.is_metadata foo.png.ttl); then echo metadata; f
 
 =cut
 function file.is_metadata() {
-  local file_pattern=${INF4[metadata_is_metadata]}
+  local file_pattern=${G[metadata_is_metadata]}
 #  log "$1 =~ $file_pattern"
   if [[ $1 =~ ${file_pattern} && ( -f ${BASH_REMATCH[1]} || -d ${BASH_REMATCH[1]} ) ]]; then
     exit 0;
@@ -313,8 +340,8 @@ function file.metadata_file() {
 
     if [[ -f $1 || -d $1 ]] ; then
       local fq=$(realpath "$1")
-      if [[ $fq == ${INF4[home]} ]]; then  # Home directory is treated different
-        ttl=$fq/${INF4[collection]}.ttl
+      if [[ $fq == ${G[home]} ]]; then  # Home directory is treated different
+        ttl=$fq/${G[collection]}.ttl
       else
         ttl=${mf//FILE/$1}
       fi
@@ -354,7 +381,7 @@ function file.path() {
 
   if [[ -z $1 ]]; then
     if [[ -n $full ]]; then
-      path=${INF4[source_host]}${INF4[source_base]}/collection/${INF4[source_collection]}
+      path=${G[source_host]}${G[source_base]}/collection/${G[source_collection]}
     else
       path=.
     fi
@@ -365,9 +392,9 @@ function file.path() {
       err 1 "$1 file.is_metadata"
     fi
 
-    path=$(realpath -m --relative-to="${INF4[home]}" "$1")
+    path=$(realpath -m --relative-to="${G[home]}" "$1")
     if [[ -n $full ]]; then
-      path=${INF4[source_host]}${INF4[source_base]}/collection/$path
+      path=${G[source_host]}${G[source_base]}/collection/$path
     fi
   fi
   echo $path
@@ -376,7 +403,7 @@ function file.path() {
 
 : <<=cut
 =pod
-=head2 file
+=head2 fetch
 =head3 USAGE
 inf4 item fetch --etag --metadata --binary <item>
 =head4
@@ -447,8 +474,11 @@ inf4 [inf4options] put --auto --mime-type=I<mime> --extra=I<extra> file
 Add a file or directory to an LDP.
 =cut
 function put() {
-  local opts=`getopt -o atM:u --long auto:,type:,no-metadata,mime-type:,update -n 'inf4 put' -- "$@"`
-  if [ $? != 0 ] ; then err 1 "Bad inf4 put options."; fi
+  local opts=()
+  if ! opts=$(getopt -o atM:u --long auto:,type:,no-metadata,mime-type:,update -n 'inf4 put' -- "$@") ; then
+    err 1 "inf4 put: bad options";
+  fi
+
   eval set -- "$opts"
 
   local metadata=
@@ -536,7 +566,7 @@ function collection.create() {
 
   _http PUT "$(file.path)"
   collection.upload .fin
-  _http PUT "$(file.path)/fcr:metadata" prefer:return=minimal Content-Type:text/turtle @${INF4[home]}/${INF4[collection]}.ttl
+  _http PUT "$(file.path)/fcr:metadata" prefer:return=minimal Content-Type:text/turtle @${G[home]}/${G[collection]}.ttl
 }
 
 function collection.delete() {
@@ -588,7 +618,7 @@ function collection.upload() {
           elif [[ -d $i ]]; then
             i=${i%/}
             fq=$(realpath "$i");
-            if [[ $fq == ${INF4[home]} ]]; then  # Home directory is treated different
+            if [[ $fq == ${G[home]} ]]; then  # Home directory is treated different
               put --no-metadata $i
               #collection.upload .fin $i/*;
               collection.upload $i/*;
@@ -645,14 +675,14 @@ function login() {
 
   read -r -d '' prompt <<PROMPT;
 Visit this URL on any device to log in, then paste token below.
-${INF4[source_host]}/auth/cas/login?cliRedirectUrl=$(urlencode ${INF4[host]}/auth/login-shell)&provideJwt=true&force=true
+${G[source_host]}/auth/cas/login?cliRedirectUrl=$(urlencode ${G[host]}/auth/login-shell)&provideJwt=true&force=true
 
 Token:
 PROMPT
 
   read -p "$prompt" -r token;
 
-   http --ssl=${INF4[http_ssl]} --session=${INF4[http_session]} ${INF4[source_host]}${INF4[source_base]} "Authorization:Bearer $token"
+   http --session=${G[http_session]} ${G[source_host]}${G[source_base]} "Authorization:Bearer $token"
 }
 
 : <<=cut
@@ -664,13 +694,14 @@ inf4 [inf4options] util.config
 displays the configuration as an associative array
 =cut
 function util.config() {
-  declare -p INF4
+  declare -p G
 #  declare -p IGNORE
 }
 
 function util.home() {
   local pwd=${PWD}
   local home=${HOME}
+  local inf4=''
   while [[ $pwd != $home && $pwd != '/' ]]; do
     if [[ -d ${pwd}/.fin ]]; then
       inf4=$pwd;
@@ -685,9 +716,25 @@ function util.home() {
   echo $inf4;
 }
 
+function _http () {
+  local stdinp=
+  local http="http --session-read-only=${G[http_session]}"
+  if [[ $1 == '-n' || -n ${G[noop]} ]]; then
+    [[ $1 == '-n' ]] && shift
+    if [[ ! -t 0 ]]; then
+      IFS='' read -r -d '' stdinp;
+      log "$http $@ <<<'$stdinp'"
+    else
+      log "$http $@"
+    fi
+  else
+    $http "$@"
+  fi
+}
+
 function _config_file() {
   local pwd=${PWD}/
-  local home=${INF4[home]}
+  local home=${G[home]}
   local file;
   until [[ $pwd < $home ]]; do
     if [[ -f ${pwd}$1 ]]; then
@@ -706,7 +753,7 @@ function _read_attributes() {
   if [[ -n $attr ]]; then
     while read -r pat val; do
       if [[ -n $pat && $pat != \#* ]]; then
-        ATTR[$pat]="$val"
+        G[attr_$pat]="$val"
       fi
     done < $attr
   fi
@@ -718,12 +765,12 @@ function _read_ignore() {
   local dir
   for attr in $(_config_file .finignore); do
     dir=$(dirname "$attr");
-    local a=${attr#${INF4[home]}/}
+    local a=${attr#${G[home]}/}
     if [[ -n $attr ]]; then
       while IFS='' read  pat; do
         if [[ -n $pat && $pat != \#* ]]; then
           pat=$(realpath "$dir/./$pat")
-          pat=${pat#${INF4[home]}/}
+          pat=${pat#${G[home]}/}
           IGNORE[$pat]=$a
         fi
       done < $attr
@@ -753,10 +800,50 @@ function parse_yaml() {
       for (i in vname) {if (i > indent) {delete vname[i]}}
       if (length($3) > 0) {
          vn=""; for (i=0; i<indent; i++) {vn=(vn)(vname[i])("_")}
-         printf("INF4[%s%s]=\"%s\"\n", vn, $2, $3);
+         printf("G[%s%s]=\"%s\"\n", vn, $2, $3);
       }
    }'
 }
+
+: <<=cut
+=pod:
+
+=head1 ADDITIONAL FUNCTIONS
+
+There are also functions C<log> and C<err>.  That are only really expected to be
+used inside the application.
+
+=cut
+
+# program at end of file. search #MAIN
+function log() {
+  local opts;
+  if ! opts=$(getopt -o v --long verbose -n 'harvest log' -- "$@"); then
+    echo "Bad Command Options." >&2 ; exit 1 ;
+	fi
+
+  eval set -- "$opts"
+
+  local log_verbose=0
+
+  while true; do
+	  case $1 in
+	    -v | --verbose) let log_verbose=$log_verbose+1;  shift;;
+	    -- ) shift; break;;
+	    *) shift; break;
+    esac
+  done
+	(( ${G[verbose]} >= $log_verbose )) && (echo $@)
+}
+
+function err() {
+  local n=1;
+  n=$1
+  shift
+  (>&2 echo err: $@)
+  exit $n;
+}
+
 
 : <<=cut
 =pod
@@ -765,54 +852,7 @@ Quinn Hart <qjhart@ucdavis.edu>
 =cut
 
 #MAIN
-declare -A INF4=([http_session]='inf4'
-                 [http_ssl]='tls1.2');
-
-declare -A ATTR;
-declare -A IGNORE;
-declare -a OPTS;
-
-
-INF4[home]=$(util.home) # Verify we are in a location
-[[ $? != 0 ]] && exit $?
-
-# Read the configuration file
-config=${INF4[home]}/.fin/config.yml
-if [[ -f $config ]]; then
-  eval $(parse_yaml "$config")
-fi
-
-_read_attributes
-_read_ignore
-
-while true; do
-	case $1 in
-	  -*) OPTS=($1); shift ;;
-	  -- ) shift; break;;
-	  *) break;
-	esac
-done
-
-function init() {
-  local opts=`getopt -o qh:np: --long quiet,base:,dry-run,print: -n 'inf4' -- "$@"`
-  if [ $? != 0 ] ; then echo "Bad Command Options." >&2 ; exit 1 ; fi
-
-  eval set -- "$opts"
-
-  while true; do
-	  case $1 in
-	    -n | --dry-run) INF4[noop]=1; shift ;;
-	    -p | --print) INF4[print]=$2; shift 2 ;;
-      -q | --quiet) INF4[quiet]=1; shift ;;
-	    -- ) shift; break;;
-	    *) break;
-	  esac
-  done
-}
-
-init $OPTS
-main.cmd "$@"
-
+main "$@"
 exit 0;
 
 # Not added yet
