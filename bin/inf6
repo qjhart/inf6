@@ -883,7 +883,7 @@ source $(dirname $0)/../lib/$(basename $0)/bash_functions.sh
 
 bash_functions.import parse_parms_lib.sh
 
-main "$@"
+#main "$@"
 exit 0;
 
 # Not added yet
