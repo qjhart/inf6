@@ -861,7 +861,7 @@ function import {
 }
 import parse_parms_lib.sh
 
-main "$@"
+#main "$@"
 exit 0;
 
 # Not added yet
