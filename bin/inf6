@@ -446,7 +446,8 @@ function item.fetch() {
 
   local path=$(file.path "$file")
   head=$(_http --print=h HEAD $(file.path "$path"))
-  eval $(parse_headers "$head")
+  declare -A headers
+  parse_headers headers "$head"
 
 #  if [[ -n $etag ]]; then
 #    if [[ -n $check ]]; then
@@ -784,13 +785,15 @@ function _read_ignore() {
 
 function parse_headers() {
 shopt -s extglob # Required to trim whitespace; see below
-declare -A headers
+local -n headers=$1
+shift
 while IFS=':' read key value; do
     # trim whitespace in "value"
     value=${value##+([[:space:]])}; value=${value%%+([[:space:]])}
     headers[$key]=$value;
 done <<< "$1"
-declare -p headers
+return 0
+#declare -p headers
 }
 
 function parse_yaml() {
@@ -848,6 +851,25 @@ function err() {
   exit $n;
 }
 
+function transaction() {
+  declare -A opts;
+  declare -a argv;
+  parse_parms.arguments --ARGV=argv --ARGN=opts "$@"
+  set "${argv[@]}"
+  cmd=$1
+  shift
+  transaction.$cmd "$@"
+
+  function transaction.init() {
+    local -n opts=$1
+    shift
+    local head=$(_http --print=h HEAD $(file.path '/fcr:tx'))
+    declare -A headers
+    parse_headers headers "$head"
+    declare -p headers
+    }
+}
+
 
 : <<=cut
 =pod
@@ -856,10 +878,10 @@ Quinn Hart <qjhart@ucdavis.edu>
 =cut
 
 #MAIN
-function import {
-  source $(basename $0)/../lib/$1
-}
-import parse_parms_lib.sh
+# get bash_functions
+source $(dirname $0)/../lib/$(basename $0)/bash_functions.sh
+
+bash_functions.import parse_parms_lib.sh
 
 main "$@"
 exit 0;
