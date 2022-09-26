@@ -100,7 +100,7 @@ function main() {
   # Now Run the command
   cmd=$1
   shift;
-
+  declare -p G
   case $cmd in
     file.path | file.ignore)
       $cmd "$@";
@@ -361,7 +361,7 @@ function file.metadata_file() {
 =pod
 =head2 file.path
 =head3 USAGE
-inf4 file.path --relative <filepath>
+inf6 file.path --relative <filepath>
 =head4
 Returns the LDP path location for the file.  The default is to simply remove
 the suffix from the basename of a file.  With full however, the suffix is retained.
@@ -385,6 +385,7 @@ function file.path() {
 
   if [[ -z $1 ]]; then
     if [[ -n $full ]]; then
+      path=${G[source_host]}${G[source_base]}
       path=${G[source_host]}${G[source_base]}/collection/${G[source_collection]}
     else
       path=.
@@ -722,7 +723,10 @@ function util.home() {
 }
 
 function _http () {
-  local stdinp=
+#  local -A opts;
+#  parse_parms.arguments --ARGV=argv --ARGN=opts "$@"
+
+   local stdinp=
   local http="http --session-read-only=${G[http_session]}"
   if [[ $1 == '-n' || -n ${G[noop]} ]]; then
     [[ $1 == '-n' ]] && shift
@@ -736,6 +740,20 @@ function _http () {
     $http "$@"
   fi
 }
+
+function parse_headers() {
+  shopt -s extglob # Required to trim whitespace; see below
+  local -n _headers=$1
+  shift
+  while IFS=':' read key value; do
+    # trim whitespace in "value"
+    value=${value##+([[:space:]])}; value=${value%%+([[:space:]])}
+    _headers[$key]=$value;
+  done <<< "$1"
+  return 0
+}
+
+
 
 function _config_file() {
   local pwd=${PWD}/
@@ -781,19 +799,6 @@ function _read_ignore() {
       done < $attr
     fi
   done
-}
-
-function parse_headers() {
-shopt -s extglob # Required to trim whitespace; see below
-local -n headers=$1
-shift
-while IFS=':' read key value; do
-    # trim whitespace in "value"
-    value=${value##+([[:space:]])}; value=${value%%+([[:space:]])}
-    headers[$key]=$value;
-done <<< "$1"
-return 0
-#declare -p headers
 }
 
 function parse_yaml() {
@@ -858,16 +863,37 @@ function transaction() {
   set "${argv[@]}"
   cmd=$1
   shift
-  transaction.$cmd "$@"
+  case $cmd in
+    init | delete | status | commit )
+      transaction.$cmd opts "$@"
+      ;;
+    * )
+      >&2 echo  "transaction $cmd not a valid command";
+      return -1
+	    ;;
+  esac
+}
 
-  function transaction.init() {
-    local -n opts=$1
-    shift
-    local head=$(_http --print=h HEAD $(file.path '/fcr:tx'))
-    declare -A headers
-    parse_headers headers "$head"
-    declare -p headers
-    }
+function transaction.init() {
+  _http -n --print=h POST "${G[source_host]}${G[source_base]}/fcr:tx"
+  local head=$(_http --print=h POST "${G[source_host]}${G[source_base]}/fcr:tx")
+  declare -A headers=([foo]="bar")
+  parse_headers headers "$head"
+  local t="${headers[Location]}"
+  # now keep this alive and set the header
+  http --session=${G[http_session]} --print=hbH POST "${t}" Atomic-ID:"${t}"
+  head=$(http --session=${G[http_session]} --print=h POST "${t}" Atomic-ID:"${t}" )
+
+}
+
+function transaction.commit() {
+  local host=${G[source_host]}
+  host=${host/#http*:\/\//}
+  host=${host/:/_}
+  local fn="~/.config/httpie/sessions/$host/${G[http_session]}.json"
+  local t=$(jq -r '.headers["Atomic-ID"]' /home/quinn/.httpie/sessions/localhost_8666/inf6.json)
+  http --session=${G[http_session]} --print=hbH PUT "${t}" Atomic-ID:
+  head=$(http --session=${G[http_session]} --print=h PUT "${t}" Atomic-ID: )
 }
 
 
@@ -879,11 +905,25 @@ Quinn Hart <qjhart@ucdavis.edu>
 
 #MAIN
 # get bash_functions
-source $(dirname $0)/../lib/$(basename $0)/bash_functions.sh
+if [[ -n ${BASH_FUNCTIONS} ]]; then
+  if [[ -f ${BASH_FUNCTIONS}/bash_functions.sh ]]; then
+    source ${BASH_FUNCTIONS}/bash_functions.sh
+  else
+    >&2 "${BASH_FUNCTIONS_HOME}/bash_functions.sh not found"
+    exit 1
+  fi
+else
+  if [[ -f $(dirname $0)/../lib/$(basename $0)/bash_functions.sh ]]; then
+    source $(dirname $0)/../lib/$(basename $0)/bash_functions.sh
+  else
+    >&2 "$(dirname $0)/../lib/$(basename $0)/bash_functions.sh not found"
+    exit 1
+  fi
+fi
 
-bash_functions.import parse_parms_lib.sh
+bash_functions.import parse_parms
 
-#main "$@"
+main "$@"
 exit 0;
 
 # Not added yet
