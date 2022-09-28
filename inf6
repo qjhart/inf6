@@ -50,12 +50,6 @@ Adjust httpie --print= argument
 function main() {
   local opts=();
 
-  declare -A -g G=([http_session]='inf6'
-                   [path]="http://localhost:8666/fcrepo/rest"
-                   [attr]=
-                   [verbose]=0
-                  );
-
   declare -A -g IGNORE;
 
   G[home]=$(util.home)
@@ -753,8 +747,6 @@ function parse_headers() {
   return 0
 }
 
-
-
 function _config_file() {
   local pwd=${PWD}/
   local home=${G[home]}
@@ -799,22 +791,6 @@ function _read_ignore() {
       done < $attr
     fi
   done
-}
-
-function parse_yaml() {
-  local prefix=$2
-  local s='[[:space:]]*' w='[a-zA-Z0-9_]*' fs=$(echo @|tr @ '\034')
-  sed -ne "s|^\($s\)\($w\)$s:$s\"\(.*\)\"$s\$|\1$fs\2$fs\3|p" \
-      -e "s|^\($s\)\($w\)$s:$s\(.*\)$s\$|\1$fs\2$fs\3|p"  $1 |
-    awk -F$fs '{
-      indent = length($1)/2;
-      vname[indent] = $2;
-      for (i in vname) {if (i > indent) {delete vname[i]}}
-      if (length($3) > 0) {
-         vn=""; for (i=0; i<indent; i++) {vn=(vn)(vname[i])("_")}
-         printf("G[%s%s]=\"%s\"\n", vn, $2, $3);
-      }
-   }'
 }
 
 : <<=cut
@@ -864,7 +840,7 @@ function transaction() {
   cmd=$1
   shift
   case $cmd in
-    init | delete | status | commit )
+    init | delete | status | commit | foo )
       transaction.$cmd opts "$@"
       ;;
     * )
@@ -874,16 +850,10 @@ function transaction() {
   esac
 }
 
-function transaction.init() {
-  _http -n --print=h POST "${G[source_host]}${G[source_base]}/fcr:tx"
-  local head=$(_http --print=h POST "${G[source_host]}${G[source_base]}/fcr:tx")
-  declare -A headers=([foo]="bar")
-  parse_headers headers "$head"
-  local t="${headers[Location]}"
+
   # now keep this alive and set the header
   http --session=${G[http_session]} --print=hbH POST "${t}" Atomic-ID:"${t}"
   head=$(http --session=${G[http_session]} --print=h POST "${t}" Atomic-ID:"${t}" )
-
 }
 
 function transaction.commit() {
@@ -892,8 +862,8 @@ function transaction.commit() {
   host=${host/:/_}
   local fn="~/.config/httpie/sessions/$host/${G[http_session]}.json"
   local t=$(jq -r '.headers["Atomic-ID"]' /home/quinn/.httpie/sessions/localhost_8666/inf6.json)
-  http --session=${G[http_session]} --print=hbH PUT "${t}" Atomic-ID:
-  head=$(http --session=${G[http_session]} --print=h PUT "${t}" Atomic-ID: )
+  http --session=${G[http_session]} --print=hbH PUT "${t}" "Atomic-ID:"
+#  head=$(http --session=${G[http_session]} --print=h PUT "${t}" "Atomic-ID:" )
 }
 
 
@@ -903,25 +873,23 @@ function transaction.commit() {
 Quinn Hart <qjhart@ucdavis.edu>
 =cut
 
-#MAIN
-# get bash_functions
-if [[ -n ${BASH_FUNCTIONS} ]]; then
-  if [[ -f ${BASH_FUNCTIONS}/bash_functions.sh ]]; then
-    source ${BASH_FUNCTIONS}/bash_functions.sh
-  else
-    >&2 "${BASH_FUNCTIONS_HOME}/bash_functions.sh not found"
-    exit 1
-  fi
+declare -A -g G=([http_session]='inf6'
+                 [base]="http://localhost:8666/fcrepo/rest"
+                 [attr]=
+                 [verbose]=0
+                 [bash_functions_dir]="$(dirname $0)/../lib/$(basename $0)"
+                );
+
+[[ -n "${INF6_BASH_FUNCTIONS_DIR}" ]] && G[bash_functions_dir]="${INF6_BASH_FUNCTIONS_DIR}"
+
+if [[ -f "${G[bash_functions_dir]}/bash_functions.sh" ]]; then
+  source "${G[bash_functions_dir]}/bash_functions.sh"
 else
-  if [[ -f $(dirname $0)/../lib/$(basename $0)/bash_functions.sh ]]; then
-    source $(dirname $0)/../lib/$(basename $0)/bash_functions.sh
-  else
-    >&2 "$(dirname $0)/../lib/$(basename $0)/bash_functions.sh not found"
-    exit 1
-  fi
+  >&2 echo "${G[bash_functions_dir]}/bash_functions.sh not found"
+  exit 1
 fi
 
-bash_functions.import parse_parms
+bash_functions.import ${G[bash_functions_dir]} parse_parms parse_yaml
 
 main "$@"
 exit 0;
